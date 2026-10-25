@@ -2313,6 +2313,7 @@ static void QCC_AliasScopesClear(void)
 }
 
 static QCC_sref_t QCC_GetTemp(QCC_type_t *type);
+static void QCC_TempMayBeFree(QCC_def_t *header);
 void QCC_FreeTemp(QCC_sref_t t);
 void QCC_FreeDef(QCC_def_t *def);
 QCC_sref_t QCC_MakeSRefForce(QCC_def_t *def, unsigned int ofs, QCC_type_t *type);
@@ -2350,6 +2351,7 @@ static void QCC_ClobberDef(QCC_def_t *def)
 						statements[st].c.sym = a->generatedfor;
 				}
 				tmp.sym->refcount = a->symbolheader->refcount;
+				QCC_TempMayBeFree(tmp.sym);
 				a->symbolheader = tmp.sym;	//the alias now refers to a temp
 				from = QCC_MakeSRefForce(a->generatedfor, 0, a->type);
 				a->generatedfor = tmp.sym;
@@ -2402,6 +2404,29 @@ static QCC_sref_t QCC_GetAliasTemp(QCC_sref_t ref)
 	return QCC_MakeSRefForce(def, 0, ref.cast);
 }
 
+//tempsfreehint[size]: a temp head such that every temp of that size below it is known to be in use
+//(refcount != 0), so QCC_GetTemp's first-fit scan can start there. Lowered whenever a temp's refcount may
+//drop (QCC_TempMayBeFree); reset by QCC_PurgeTemps.
+#define TEMPSFREEHINT_SIZES 8
+static size_t tempsfreehint[TEMPSFREEHINT_SIZES];
+static void QCC_TempMayBeFree(QCC_def_t *header)
+{
+	size_t i, idx;
+	if (!header || !header->temp)
+		return;
+	if (header->temp < tempsinfo || header->temp >= tempsinfo + tempsused)
+		idx = 0;	//shouldn't happen; be conservative
+	else
+	{
+		idx = header->temp - tempsinfo;
+		while (idx > 0 && !tempsinfo[idx].size)
+			idx--;	//hints must be temp heads
+	}
+	for (i = 0; i < TEMPSFREEHINT_SIZES; i++)
+		if (tempsfreehint[i] > idx)
+			tempsfreehint[i] = idx;
+}
+
 static QCC_sref_t QCC_GetTemp(QCC_type_t *type)
 {
 	QCC_sref_t var_c = nullsref;
@@ -2411,11 +2436,16 @@ static QCC_sref_t QCC_GetTemp(QCC_type_t *type)
 
 	if (opt_overlaptemps)	//don't exceed. This lets us allocate a huge block, and still be able to compile smegging big funcs.
 	{
-		for (u = 0; u < tempsused; u += tempsinfo[u].size)
+		//first fit, as before, but skipping the temps of this size known to be in use (see tempsfreehint).
+		u = (type->size < TEMPSFREEHINT_SIZES)?tempsfreehint[type->size]:0;
+		for (; u < tempsused; u += tempsinfo[u].size)
 		{
 			if (!tempsinfo[u].def->refcount && tempsinfo[u].size == type->size)
 				break;
 		}
+		//everything of this size below u is in use, and u is about to be (or is newly appended at tempsused).
+		if (type->size < TEMPSFREEHINT_SIZES)
+			tempsfreehint[type->size] = u;
 	}
 	else
 		u = tempsused;
@@ -2503,6 +2533,8 @@ void QCC_FreeDef(QCC_def_t *def)
 	{
 		if (--def->symbolheader->refcount < 0)
 			QCC_PR_ParseWarning(WARN_DEBUGGING, "INTERNAL: over-freed refcount to %s", def->name);
+		if (def->symbolheader->refcount <= 0)
+			QCC_TempMayBeFree(def->symbolheader);
 	}
 }
 //nothing else references this temp.
@@ -2512,6 +2544,8 @@ void QCC_FreeTemp(QCC_sref_t t)
 	{
 		if (--t.sym->symbolheader->refcount < 0)
 			QCC_PR_ParseWarning(WARN_DEBUGGING, "INTERNAL: over-freed refcount to %s", QCC_VarAtOffset(t));
+		if (t.sym->symbolheader->refcount <= 0)
+			QCC_TempMayBeFree(t.sym->symbolheader);
 	}
 }
 
@@ -2557,6 +2591,7 @@ void QCC_PurgeTemps(void)
 	aliases = NULL;
 	allaliases = NULL;
 	QCC_AliasScopesClear();
+	memset(tempsfreehint, 0, sizeof(tempsfreehint));
 
 
 	max_labels = 0;
