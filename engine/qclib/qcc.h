@@ -445,6 +445,7 @@ typedef struct QCC_def_s
 	struct QCC_function_s	*scope;		// function the var was defined in, or NULL
 	struct QCC_def_s	*deftail;	// arrays and structs create multiple globaldef objects providing different types at the different parts of the single object (struct), or alternative names (vectors). this allows us to correctly set the const type based upon how its initialised.
 	struct QCC_def_s	*generatedfor;
+	struct QCC_def_s	*nextscopealias;	//aliases (QCC_GetAliasTemp) of the same scope, newest first; see QCC_MakeLocked.
 	int			constant;		// 1 says we can use the value over and over again. 2 is used on fields, for some reason.
 
 	struct QCC_def_s	*reloc;		//the symbol that we're a reloc for

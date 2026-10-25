@@ -2257,6 +2257,61 @@ temp_t *tempsinfo;
 QCC_def_t *aliases;
 QCC_def_t *allaliases;
 
+//allaliases bucketed by the alias's scope (chained through nextscopealias), so QCC_MakeLocked only walks the
+//current function's aliases instead of every alias created so far (that made the compile quadratic).
+//Cleared wherever allaliases is.
+typedef struct aliasscope_s
+{
+	QCC_function_t *scope;
+	QCC_def_t *head;
+	struct aliasscope_s *next;
+} aliasscope_t;
+#define ALIASSCOPE_BUCKETS 4096
+static aliasscope_t *aliasscopes[ALIASSCOPE_BUCKETS];
+static aliasscope_t *aliasscopes_free;	//recycled entries
+static aliasscope_t **QCC_AliasScopeBucket(QCC_function_t *scope)
+{
+	size_t h = (size_t)scope;
+	h ^= h >> 17;
+	h *= 0x9E3779B1u;
+	return &aliasscopes[(h >> 7) & (ALIASSCOPE_BUCKETS-1)];
+}
+static aliasscope_t *QCC_AliasScopeFind(QCC_function_t *scope, pbool create)
+{
+	aliasscope_t **b = QCC_AliasScopeBucket(scope), *e;
+	for (e = *b; e; e = e->next)
+		if (e->scope == scope)
+			return e;
+	if (!create)
+		return NULL;
+	if (aliasscopes_free)
+	{
+		e = aliasscopes_free;
+		aliasscopes_free = e->next;
+	}
+	else
+		e = malloc(sizeof(*e));
+	e->scope = scope;
+	e->head = NULL;
+	e->next = *b;
+	*b = e;
+	return e;
+}
+static void QCC_AliasScopesClear(void)
+{
+	size_t i;
+	aliasscope_t *e;
+	for (i = 0; i < ALIASSCOPE_BUCKETS; i++)
+	{
+		while ((e = aliasscopes[i]))
+		{
+			aliasscopes[i] = e->next;
+			e->next = aliasscopes_free;
+			aliasscopes_free = e;
+		}
+	}
+}
+
 static QCC_sref_t QCC_GetTemp(QCC_type_t *type);
 void QCC_FreeTemp(QCC_sref_t t);
 void QCC_FreeDef(QCC_def_t *def);
@@ -2332,6 +2387,11 @@ static QCC_sref_t QCC_GetAliasTemp(QCC_sref_t ref)
 	def->strip = true;
 	def->next = allaliases;
 	allaliases = def;
+	{
+		aliasscope_t *s = QCC_AliasScopeFind(pr_scope, true);
+		def->nextscopealias = s->head;
+		s->head = def;
+	}
 
 	//and active aliases are the ones that are currently live in their original location
 	def->nextlocal = aliases;
@@ -2428,6 +2488,7 @@ void QCC_FinaliseTemps(void)
 	}
 
 	//finalize alises so they map correctly.
+	QCC_AliasScopesClear();
 	while(allaliases)
 	{
 		allaliases->symbolheader = allaliases->generatedfor->symbolheader;
@@ -2495,6 +2556,7 @@ void QCC_PurgeTemps(void)
 	tempsused = 0;
 	aliases = NULL;
 	allaliases = NULL;
+	QCC_AliasScopesClear();
 
 
 	max_labels = 0;
@@ -2543,7 +2605,8 @@ static QCC_def_t *QCC_MakeLocked(gofs_t tofs, gofs_t tsize, QCC_def_t *tmp)
 #endif
 
 	QCC_def_t *def = NULL;
-	QCC_def_t *a, **link;
+	QCC_def_t *a;
+	aliasscope_t *s;
 	tempslocked+=tsize;
 
 	def = QCC_PR_DummyDef(type_float, NULL, pr_scope, tsize==1?0:tsize, NULL, 0, false, GDF_STRIP);
@@ -2558,19 +2621,15 @@ static QCC_def_t *QCC_MakeLocked(gofs_t tofs, gofs_t tsize, QCC_def_t *tmp)
 
 	//aliases might refer to this temp.
 	//make sure they point to the local instead.
-	for (link = &allaliases; *link;)
+	//(only this scope's aliases can match, so walk its bucket rather than all of allaliases)
+	s = QCC_AliasScopeFind(pr_scope, false);
+	for (a = s?s->head:NULL; a; a = a->nextscopealias)
 	{
-		a = *link;
 		if (a->generatedfor == tmp && a->scope == pr_scope)
 		{
-//			*link = a->next;
-//			a->next = NULL;
-			
 			a->generatedfor = def;
 			a->name = def->name;
 		}
-		else
-			link = &(*link)->next;
 	}
 	return def;
 }
