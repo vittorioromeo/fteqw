@@ -1244,7 +1244,10 @@ static pbool QCC_PR_Precompiler(void)
 					else
 						asmfile = fopen("qc.asm", "wb");
 					if (asmfile)
+					{
+						setvbuf(asmfile, NULL, _IOFBF, 1<<20);
 						asmfilebegun = true;
+					}
 				}
 			}
 			else if (!QC_strcasecmp(qcc_token, "optimise") || !QC_strcasecmp(qcc_token, "optimize"))	//bloomin' americans.

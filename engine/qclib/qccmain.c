@@ -5765,6 +5765,7 @@ memset(pr_immediate_string, 0, sizeof(pr_immediate_string));
 		asmfile = fopen("qc.asm", "wb");
 		if (!asmfile)
 			QCC_Error (ERR_INTERNAL, "Couldn't open file for asm output.");
+		setvbuf(asmfile, NULL, _IOFBF, 1<<20);	//qc.asm can be gigabytes; the default 4k buffer costs a write call per 4k
 	}
 	asmfilebegun = !!asmfile;
 #endif

@@ -2836,6 +2836,19 @@ static void QCC_RemapLockedTemps(int firststatement, int laststatement)
 		tempsinfo[lockedheads[n]].locked = false;
 }
 
+static char *QCC_AsmUInt(char *o, unsigned int v)
+{	//like %u, returns the end
+	char t[16];
+	int n = 0;
+	do
+	{
+		t[n++] = '0' + v%10;
+		v /= 10;
+	} while (v);
+	while (n)
+		*o++ = t[--n];
+	return o;
+}
 static void QCC_fprintfLocals(FILE *f, QCC_def_t *locals)
 {
 	QCC_def_t	*var;
@@ -2851,13 +2864,47 @@ static void QCC_fprintfLocals(FILE *f, QCC_def_t *locals)
 	}
 
 	if (opt_overlaptemps)	//don't spam.
-	for (u = 0; u < tempsused; u += tempsinfo[u].size)
 	{
-		if (!tempsinfo[u].locked)
-//		if (tempsinfo[u].lastfunc == pr_scope)
+		//this lists every temp for every function (thousands of lines each in big progs), so it's formatted by
+		//hand into a block and written with one fwrite, rather than one fprintf per line. Same text as
+		//fprintf(f, "local %s temp_%u; //%i\n", ...).
+		char block[16384];
+		char *o = block;
+		for (u = 0; u < tempsused; u += tempsinfo[u].size)
 		{
-			fprintf(f, "local %s temp_%u; //%i\n", (tempsinfo[u].size == 1)?"float":"vector", (unsigned)u, tempsinfo[u].lastline);
+			if (!tempsinfo[u].locked)
+//			if (tempsinfo[u].lastfunc == pr_scope)
+			{
+				if (o > block + sizeof(block) - 64)
+				{
+					fwrite(block, 1, o - block, f);
+					o = block;
+				}
+				if (tempsinfo[u].size == 1)
+				{
+					memcpy(o, "local float temp_", 17);
+					o += 17;
+				}
+				else
+				{
+					memcpy(o, "local vector temp_", 18);
+					o += 18;
+				}
+				o = QCC_AsmUInt(o, (unsigned)u);
+				memcpy(o, "; //", 4);
+				o += 4;
+				if ((int)tempsinfo[u].lastline < 0)
+				{
+					*o++ = '-';
+					o = QCC_AsmUInt(o, 0u - tempsinfo[u].lastline);
+				}
+				else
+					o = QCC_AsmUInt(o, tempsinfo[u].lastline);
+				*o++ = '\n';
+			}
 		}
+		if (o > block)
+			fwrite(block, 1, o - block, f);
 	}
 }
 
