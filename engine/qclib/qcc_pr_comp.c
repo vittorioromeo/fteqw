@@ -2633,37 +2633,17 @@ static QCC_def_t *QCC_MakeLocked(gofs_t tofs, gofs_t tsize, QCC_def_t *tmp)
 	}
 	return def;
 }
-static void QCC_RemapLockedTemp(gofs_t tofs, gofs_t tsize, int firststatement, int laststatement)
+//per-temp-slot scratch for QCC_RemapLockedTemps, grown to tempsused.
+typedef struct
 {
-	QCC_def_t *def = NULL;
-	QCC_statement_t *st;
-	int i;
-
-	for (i = firststatement, st = &statements[i]; i < laststatement; i++, st++)
-	{
-		if (pr_opcodes[st->op].type_a && st->a.sym && st->a.sym->temp && st->a.sym->ofs >= tofs && st->a.sym->ofs < tofs + tsize)
-		{
-			if (!def)
-				def = QCC_MakeLocked(tofs, tsize, st->a.sym);
-			st->a.sym = def;
-//			st->a.ofs = st->a.ofs - tofs;
-		}
-		if (pr_opcodes[st->op].type_b && st->b.sym && st->b.sym->temp && st->b.sym->ofs >= tofs && st->b.sym->ofs < tofs + tsize)
-		{
-			if (!def)
-				def = QCC_MakeLocked(tofs, tsize, st->b.sym);
-			st->b.sym = def;
-//			st->b.ofs = st->b.ofs - tofs;
-		}
-		if (pr_opcodes[st->op].type_c && st->c.sym && st->c.sym->temp && st->c.sym->ofs >= tofs && st->c.sym->ofs < tofs + tsize)
-		{
-			if (!def)
-				def = QCC_MakeLocked(tofs, tsize, st->c.sym);
-			st->c.sym = def;
-//			st->c.ofs = st->c.ofs - tofs;
-		}
-	}
-}
+	size_t head;		//head temp of the locked temp covering this slot, or ~0 if it's not locked
+	QCC_def_t *firstref;	//(heads only) the first operand referring to it, in statement order
+	QCC_def_t *local;	//(heads only) the local it's remapped to
+} lockedremap_t;
+static lockedremap_t *lockedremap;
+static size_t lockedremap_max;
+static size_t *lockedheads;
+static size_t lockedheads_max;
 
 //called for function calls to avoid wasting copies
 static pbool QCC_RemapTemp(int firststatement, int laststatement, QCC_sref_t temp, QCC_sref_t targ)
@@ -2728,17 +2708,97 @@ static pbool QCC_RemapTemp(int firststatement, int laststatement, QCC_sref_t tem
 	return remapped;
 }
 
+//Remaps every locked temp to a fresh local within [firststatement, laststatement).
+//This used to rescan all the statements once per locked temp; now it's two passes over the statements, with the
+//locals still created in ascending temp order (and from the same first operand) so the output is unchanged.
 static void QCC_RemapLockedTemps(int firststatement, int laststatement)
 {
-	size_t u;
+	size_t u, v, h, n, nlocked = 0;
+	QCC_statement_t *st;
+	int i, k;
+	QCC_def_t **ops[3];
+	QCC_type_t *optype[3];
+
+	//collect the locked temps (ascending).
 	for (u = 0; u < tempsused; u += tempsinfo[u].size)
 	{
 		if (tempsinfo[u].locked)
 		{
-			QCC_RemapLockedTemp(u, tempsinfo[u].size, firststatement, laststatement);
-			tempsinfo[u].locked = false;
+			if (nlocked == lockedheads_max)
+			{
+				lockedheads_max = lockedheads_max*2 + 64;
+				lockedheads = realloc(lockedheads, lockedheads_max * sizeof(*lockedheads));
+			}
+			lockedheads[nlocked++] = u;
 		}
 	}
+
+	if (nlocked && firststatement < laststatement)
+	{
+		if (lockedremap_max < tempsused)
+		{	//new slots start unmapped; mapped slots are reset below, so the table stays all-unmapped between calls.
+			size_t newmax = (tempsused + 255) & ~(size_t)255;
+			lockedremap = realloc(lockedremap, newmax * sizeof(*lockedremap));
+			for (v = lockedremap_max; v < newmax; v++)
+				lockedremap[v].head = ~(size_t)0;
+			lockedremap_max = newmax;
+		}
+		for (n = 0; n < nlocked; n++)
+		{
+			u = lockedheads[n];
+			for (v = 0; v < tempsinfo[u].size; v++)
+				lockedremap[u+v].head = u;
+			lockedremap[u].firstref = NULL;
+			lockedremap[u].local = NULL;
+		}
+
+		//pass 1: find each locked temp's first reference.
+		for (i = firststatement, st = &statements[i]; i < laststatement; i++, st++)
+		{
+			ops[0] = &st->a.sym; optype[0] = pr_opcodes[st->op].type_a;
+			ops[1] = &st->b.sym; optype[1] = pr_opcodes[st->op].type_b;
+			ops[2] = &st->c.sym; optype[2] = pr_opcodes[st->op].type_c;
+			for (k = 0; k < 3; k++)
+			{
+				QCC_def_t *s = *ops[k];
+				if (optype[k] && s && s->temp && s->ofs < tempsused && (h = lockedremap[s->ofs].head) != ~(size_t)0)
+				{
+					if (!lockedremap[h].firstref)
+						lockedremap[h].firstref = s;
+				}
+			}
+		}
+		//create the locals in ascending temp order, like the per-temp scans did.
+		for (n = 0; n < nlocked; n++)
+		{
+			u = lockedheads[n];
+			if (lockedremap[u].firstref)
+				lockedremap[u].local = QCC_MakeLocked(u, tempsinfo[u].size, lockedremap[u].firstref);
+		}
+		//pass 2: rewrite the references.
+		for (i = firststatement, st = &statements[i]; i < laststatement; i++, st++)
+		{
+			ops[0] = &st->a.sym; optype[0] = pr_opcodes[st->op].type_a;
+			ops[1] = &st->b.sym; optype[1] = pr_opcodes[st->op].type_b;
+			ops[2] = &st->c.sym; optype[2] = pr_opcodes[st->op].type_c;
+			for (k = 0; k < 3; k++)
+			{
+				QCC_def_t *s = *ops[k];
+				if (optype[k] && s && s->temp && s->ofs < tempsused && (h = lockedremap[s->ofs].head) != ~(size_t)0)
+					*ops[k] = lockedremap[h].local;
+			}
+		}
+
+		for (n = 0; n < nlocked; n++)
+		{
+			u = lockedheads[n];
+			for (v = 0; v < tempsinfo[u].size; v++)
+				lockedremap[u+v].head = ~(size_t)0;
+		}
+	}
+
+	for (n = 0; n < nlocked; n++)
+		tempsinfo[lockedheads[n]].locked = false;
 }
 
 static void QCC_fprintfLocals(FILE *f, QCC_def_t *locals)
