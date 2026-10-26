@@ -4165,16 +4165,16 @@ NORETURN void VARGS QCC_PR_ParseError (int errortype, const char *error, ...)
 	va_list		argptr;
 	char		string[1024];
 
-	va_start (argptr,error);
-	QC_vsnprintf (string,sizeof(string)-1, error,argptr);
-	va_end (argptr);
-
 #ifndef QCC
 	editbadfile(s_filen, pr_source_line);
 #endif
 
-	if (error)
+	if (error)	//a NULL error aborts silently (the message was already printed), and must not reach vsnprintf.
 	{
+		va_start (argptr,error);
+		QC_vsnprintf (string,sizeof(string)-1, error,argptr);
+		va_end (argptr);
+
 		QCC_PR_PrintScope();
 		if (flag_msvcstyle)
 			externs->Printf ("%s%s(%i) : %serror%s: %s\n", col_location, s_filen, pr_source_line, col_error, col_none, string);
