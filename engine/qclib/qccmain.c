@@ -439,6 +439,7 @@ compiler_flag_t compiler_flag[] = {
 	{&flag_ILP32,			FLAG_MIDCOMPILE,"ILP32",		"ILP32 Data Model",		"Restricts the size of `long` to 32bits, consistent with pointers."},
 	{&flag_undefwordsize,	hideflag,		"undefwordsize","Undefined Word Size",	"Do not make assumptions about pointer types and word sizes. Block functionality that depends upon specific word sizes. Changed as part of target."},
 	{&flag_pointerrelocs,	hideflag,		"pointerrelocs","Initialised Pointers",	"Allow pointer types to be preinitialised at compile time, both at global scope and optimising local scope a little."},
+	{&flag_fte32,			FLAG_MIDCOMPILE,"fte32",		"32-bit Output",		"Always writes the 32-bit statement and def format (FTE's extended progs, secondary version FTE32) instead of only when the 16-bit one overflows. The code is unchanged; the engine must load that format."},
 	{&flag_noreflection,	FLAG_MIDCOMPILE,"omitinternals","Omit Reflection Info",	"Keeps internal symbols private (equivelent to unix's hidden visibility). This has the effect of reducing filesize, thwarting debuggers, and breaking saved games. This allows you to use arrays without massively bloating the size of your progs.\nWARNING: The bit about breaking saved games was NOT a joke, but does not apply to menuqc or csqc. It also interferes with FTE_MULTIPROGS."},
 
 	{&flag_embedsrc,		FLAG_MIDCOMPILE,"embedsrc",		"Embed Sources",		"Write the sourcecode into the output file. The resulting .dat can be opened as a standard zip archive (or by fteqccgui).\nGood for GPL compliance!"},
@@ -1882,6 +1883,11 @@ static pbool QCC_WriteData (int crc)
 				outputsttype = PST_FTE32;
 			}
 		}
+		else if (flag_fte32 && qcc_targetformat != QCF_HEXEN2)
+		{
+			//-Ffte32: the same code in the 32-bit FTE container (as the numpr_globals overflow above), every build.
+			outputsttype = PST_FTE32;
+		}
 		else if (qcc_targetformat == QCF_FTEH2)
 		{
 			externs->Printf("Progs execution will require FTE\n");
@@ -1926,6 +1932,8 @@ static pbool QCC_WriteData (int crc)
 				externs->Printf("Using 32 bit target due to numpr_globals\n");
 				outputsttype = PST_FTE32;
 			}
+			else if (flag_fte32)
+				outputsttype = PST_FTE32;
 		}
 
 		if (qcc_targetformat == QCF_QSS || qcc_targetformat == QCF_DARKPLACES)

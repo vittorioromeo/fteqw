@@ -157,6 +157,7 @@ pbool flag_qcfuncs;			//void() is a function type, and not a syntax error.
 pbool flag_allowuninit;		//ignore uninitialised locals, avoiding all private locals.
 pbool flag_embedsrc;		//embed all source files inside the .dat (can be opened with any zip program)
 pbool flag_noreflection;	//no reflection stuff, for smaller unsavable binaries.
+pbool flag_fte32;		//always write the 32-bit (FTE32) statement and def format, not only on overflow.
 pbool flag_nopragmafileline;//ignore #pragma file and #pragma line, so that I can actually read+debug xonotic's code.
 pbool flag_utf8strings;		//strings default to u8"" string rules.
 pbool flag_reciprocalmaths;	//unsafe maths optimisations
